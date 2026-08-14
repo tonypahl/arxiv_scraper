@@ -1,4 +1,4 @@
-# arXiv Monitor
+# arXiv scraper
 
 Checks arXiv for new papers by authors and/or keywords you care about, emails
 you a digest, and adds the papers to a Zotero library. Designed to run once a
@@ -26,8 +26,8 @@ whichever column is first), one keyword/phrase per row:
 
 | Keyword |
 |---------|
-| gravitational lensing |
-| dark matter halos |
+| reionization |
+| lyman alpha |
 
 **Tab 3 — Blackout** — date ranges during which you don't want emails:
 
@@ -45,8 +45,8 @@ sheet is usually `0`.
 ## 2. Install
 
 ```bash
-git clone <this-repo-or-copy-these-files> arxiv_monitor
-cd arxiv_monitor
+git clone <this-repo-or-copy-these-files> arxiv_scraper
+cd arxiv_scraper
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -70,7 +70,7 @@ Edit `config.ini`:
   `smtp.gmail.com` on port 587. You just need an App Password:
   1. Turn on 2-Step Verification if it isn't already: https://myaccount.google.com/security
   2. Go to https://myaccount.google.com/apppasswords, create one (name it
-     something like "arxiv monitor"), and copy the 16-character password.
+     something like "arxiv scraper"), and copy the 16-character password.
   3. Put your Gmail address in `smtp_user` and `from_addr`, and the app
      password (no spaces) in `smtp_password`. Your regular Gmail password
      won't work here — Google blocks plain-password SMTP logins.
@@ -88,11 +88,11 @@ Edit `config.ini`:
 
 ```bash
 source venv/bin/activate
-python3 arxiv_monitor.py
+python3 arxiv_scraper.py
 ```
 
 First run: since there's no prior state, it looks back one day. Check
-`arxiv_monitor.log` for what happened, and `state.json` gets created to
+`arxiv_scraper.log` for what happened, and `state.json` gets created to
 track what's already been sent.
 
 To force a wider look-back for testing (e.g. to see if it finds anything at
@@ -106,7 +106,7 @@ the boundary.
 Run on weekdays only, e.g. 8:00am server time:
 
 ```
-0 8 * * 1-5 cd /path/to/arxiv_monitor && ./venv/bin/python3 arxiv_monitor.py >> cron.log 2>&1
+0 8 * * 1-5 cd /path/to/arxiv_scraper && ./venv/bin/python3 arxiv_scraper.py >> cron.log 2>&1
 ```
 
 Edit with `crontab -e`. Adjust the hour to your preference — since the
@@ -118,9 +118,7 @@ script always searches everything since its last successful run (not just
 - **Query**: authors and keywords are OR'd together, then AND'd with your
   category filter and a submitted-date range covering everything since the
   last successful run. This uses arXiv's official API
-  (`export.arxiv.org/api/query`), not the HTML search page, so it's stable
-  and returns structured data (title, authors, abstract, categories, links)
-  directly — no scraping.
+  (`export.arxiv.org/api/query`).
 - **De-dup**: every paper id seen is stored in `state.json` so the same
   paper is never emailed or added to Zotero twice, even if it matches
   multiple authors/keywords or shows up again in a later query window.
@@ -142,5 +140,4 @@ script always searches everything since its last successful run (not just
   truncated (600 char) abstract. Adjust `send_email()` for a different
   format.
 - `max_results` in `fetch_papers` caps at 200 papers per run as a safety
-  limit — plenty for a daily digest, but raise it if you add a lot of broad
-  keywords.
+  limit — raise it if you add a lot of broad keywords.

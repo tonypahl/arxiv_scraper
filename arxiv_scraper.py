@@ -28,6 +28,7 @@ from datetime import datetime, timedelta, date
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
+import random
 
 import pandas as pd
 import requests
@@ -158,6 +159,29 @@ def build_query(authors, keywords, categories):
     return f"{match_clause} AND {cat_clause}"
 
 
+DEFAULT_TIMEOUT = 60          # up from 30
+MAX_RETRIES = 4
+BACKOFF_BASE = 5              # seconds
+
+
+def fetch_with_retry(url, timeout=DEFAULT_TIMEOUT, max_retries=MAX_RETRIES):
+    """GET with retry + exponential backoff + jitter on timeout/connection errors."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(url, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except (requests.exceptions.ReadTimeout,
+                requests.exceptions.ConnectionError) as e:
+            if attempt == max_retries:
+                log.error("Giving up after %d attempts: %s", attempt, e)
+                raise
+            wait = BACKOFF_BASE * (2 ** (attempt - 1)) + random.uniform(0, 2)
+            log.warning("Request failed (attempt %d/%d): %s -- retrying in %.1fs",
+                        attempt, max_retries, e, wait)
+            time.sleep(wait)
+
+
 def fetch_papers(search_query, from_date, to_date, max_results=200):
     """Query the arXiv API, paginating as needed, and filter to the date window client-side.
 
@@ -186,8 +210,7 @@ def fetch_papers(search_query, from_date, to_date, max_results=200):
         }
         url = ARXIV_API_URL + "?" + urllib.parse.urlencode(params)
         log.info("Querying arXiv API (start=%d): %s", start, full_query)
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
+        resp = fetch_with_retry(url)
         root = ET.fromstring(resp.content)
         entries = root.findall("atom:entry", ARXIV_NS)
         if not entries:

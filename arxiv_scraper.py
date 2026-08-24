@@ -165,12 +165,34 @@ BACKOFF_BASE = 5              # seconds
 
 
 def fetch_with_retry(url, timeout=DEFAULT_TIMEOUT, max_retries=MAX_RETRIES):
-    """GET with retry + exponential backoff + jitter on timeout/connection errors."""
+    """GET with retry + exponential backoff + jitter on timeout/connection errors,
+    longer backoff for HTTP 429 rate-limit responses."""
     for attempt in range(1, max_retries + 1):
         try:
             resp = requests.get(url, timeout=timeout)
+ 
+            if resp.status_code == 429:
+                if attempt == max_retries:
+                    log.error("Giving up after %d attempts: still rate-limited (429)", attempt)
+                    resp.raise_for_status()
+                retry_after = resp.headers.get("Retry-After")
+                if retry_after is not None:
+                    try:
+                        wait = float(retry_after)
+                    except ValueError:
+                        wait = BACKOFF_BASE * (2 ** attempt)
+                else:
+                    # rate limits warrant a longer, more conservative backoff
+                    # than a plain timeout/connection error
+                    wait = BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 3)
+                log.warning("Rate limited (429) on attempt %d/%d -- retrying in %.1fs",
+                            attempt, max_retries, wait)
+                time.sleep(wait)
+                continue
+ 
             resp.raise_for_status()
             return resp
+ 
         except (requests.exceptions.ReadTimeout,
                 requests.exceptions.ConnectionError) as e:
             if attempt == max_retries:
@@ -180,6 +202,10 @@ def fetch_with_retry(url, timeout=DEFAULT_TIMEOUT, max_retries=MAX_RETRIES):
             log.warning("Request failed (attempt %d/%d): %s -- retrying in %.1fs",
                         attempt, max_retries, e, wait)
             time.sleep(wait)
+ 
+    # all attempts were 429s and the loop above already raised on the last one,
+    # but keep a fallback in case max_retries == 0
+    raise requests.exceptions.HTTPError("Rate limited (429) and out of retries")
 
 
 def fetch_papers(search_query, from_date, to_date, max_results=200):

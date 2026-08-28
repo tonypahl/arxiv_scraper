@@ -159,21 +159,25 @@ def build_query(authors, keywords, categories):
     return f"{match_clause} AND {cat_clause}"
 
 
+RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
+
 DEFAULT_TIMEOUT = 60          # up from 30
 MAX_RETRIES = 4
 BACKOFF_BASE = 5              # seconds
 
-
 def fetch_with_retry(url, timeout=DEFAULT_TIMEOUT, max_retries=MAX_RETRIES):
     """GET with retry + exponential backoff + jitter on timeout/connection errors,
-    longer backoff for HTTP 429 rate-limit responses."""
+    and separate (longer) backoff for HTTP 429/502/503/504 -- rate-limiting and
+    transient server-side unavailability, both of which warrant backing off
+    rather than hammering the server again immediately."""
     for attempt in range(1, max_retries + 1):
         try:
             resp = requests.get(url, timeout=timeout)
  
-            if resp.status_code == 429:
+            if resp.status_code in RETRYABLE_STATUS_CODES:
                 if attempt == max_retries:
-                    log.error("Giving up after %d attempts: still rate-limited (429)", attempt)
+                    log.error("Giving up after %d attempts: still getting HTTP %d",
+                              attempt, resp.status_code)
                     resp.raise_for_status()
                 retry_after = resp.headers.get("Retry-After")
                 if retry_after is not None:
@@ -182,11 +186,11 @@ def fetch_with_retry(url, timeout=DEFAULT_TIMEOUT, max_retries=MAX_RETRIES):
                     except ValueError:
                         wait = BACKOFF_BASE * (2 ** attempt)
                 else:
-                    # rate limits warrant a longer, more conservative backoff
-                    # than a plain timeout/connection error
+                    # rate limits and server errors both warrant a longer,
+                    # more conservative backoff than a plain timeout
                     wait = BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 3)
-                log.warning("Rate limited (429) on attempt %d/%d -- retrying in %.1fs",
-                            attempt, max_retries, wait)
+                log.warning("HTTP %d on attempt %d/%d -- retrying in %.1fs",
+                            resp.status_code, attempt, max_retries, wait)
                 time.sleep(wait)
                 continue
  
@@ -203,8 +207,9 @@ def fetch_with_retry(url, timeout=DEFAULT_TIMEOUT, max_retries=MAX_RETRIES):
                         attempt, max_retries, e, wait)
             time.sleep(wait)
  
-    # all attempts were 429s and the loop above already raised on the last one,
-    # but keep a fallback in case max_retries == 0
+    # all attempts hit a retryable status and the loop above already raised on
+    # the last one, but keep a fallback in case max_retries == 0
+ 
     raise requests.exceptions.HTTPError("Rate limited (429) and out of retries")
 
 

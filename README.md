@@ -111,7 +111,9 @@ Run on weekdays only, e.g. 8:00am server time:
 
 Edit with `crontab -e`. Adjust the hour to your preference — since the
 script always searches everything since its last successful run (not just
-"today"), a missed or delayed run won't lose papers.
+"today"), a missed or delayed run won't lose papers. If you are getting timeout 
+issues in your logfile, set the hour to the middle of the night when arxiv is 
+less overloaded.
 
 ## 5. How the pieces fit together
 

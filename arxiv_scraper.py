@@ -55,6 +55,14 @@ DEFAULT_TIMEOUT = 60          # per-request read timeout, in seconds
 MAX_RETRIES = 4
 BACKOFF_BASE = 5              # seconds
 
+
+# How many days before the last run each query window starts. arXiv only
+# exposes a paper in the API once it's announced, which can be a day or more
+# (or a whole weekend) after its submittedDate. Overlapping the window catches
+# papers submitted before the last run but announced after it; seen_ids
+# prevents the overlap from producing duplicates.
+LOOKBACK_DAYS = 7
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -419,7 +427,8 @@ def main():
     pending = state.get("pending_papers", [])
 
     search_query = build_query(authors, keywords, categories)
-    new_papers = fetch_papers(search_query, from_date=last_run, to_date=today)
+    window_start = last_run - timedelta(days=LOOKBACK_DAYS)
+    new_papers = fetch_papers(search_query, from_date=window_start, to_date=today)
 
     # de-dupe against papers we've already processed (across any run)
     fresh = [p for p in new_papers if p["id"] not in seen_ids]

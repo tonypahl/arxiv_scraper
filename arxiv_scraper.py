@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-arxiv_scraper.py
+arxiv_monitor.py
 
 Checks arXiv daily (intended to be run on weekdays via cron) for new papers
 matching a list of authors and/or keywords, both configured in a Google
@@ -20,6 +20,7 @@ is persisted to state.json next to this script.
 import configparser
 import json
 import logging
+import random
 import smtplib
 import sys
 import time
@@ -28,7 +29,6 @@ from datetime import datetime, timedelta, date
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-import random
 
 import pandas as pd
 import requests
@@ -41,18 +41,29 @@ except ImportError:
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = SCRIPT_DIR / "config.ini"
-ARXIV_API_URL = "http://export.arxiv.org/api/query"
+ARXIV_API_URL = "https://export.arxiv.org/api/query"
+
+# Default headers for arXiv requests. The User-Agent can be overridden via
+# `user_agent` in the [arxiv] section of config.ini (applied in main()).
+REQUEST_HEADERS = {
+    "User-Agent": "arxiv-monitor/1.0",
+    "Accept": "application/atom+xml",
+}
 ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+
+DEFAULT_TIMEOUT = 60          # per-request read timeout, in seconds
+MAX_RETRIES = 4
+BACKOFF_BASE = 5              # seconds
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler(SCRIPT_DIR / "arxiv_scraper.log"),
+        logging.FileHandler(SCRIPT_DIR / "arxiv_monitor.log"),
         logging.StreamHandler(sys.stdout),
     ],
 )
-log = logging.getLogger("arxiv_scraper")
+log = logging.getLogger("arxiv_monitor")
 
 
 # --------------------------------------------------------------------------
@@ -159,11 +170,10 @@ def build_query(authors, keywords, categories):
     return f"{match_clause} AND {cat_clause}"
 
 
-RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
+# 406 isn't normally transient, but arXiv has been returning it intermittently
+# (apparently from its edge/bot filtering), so treat it as retryable too.
+RETRYABLE_STATUS_CODES = {406, 429, 502, 503, 504}
 
-DEFAULT_TIMEOUT = 60          # up from 30
-MAX_RETRIES = 4
-BACKOFF_BASE = 5              # seconds
 
 def fetch_with_retry(url, timeout=DEFAULT_TIMEOUT, max_retries=MAX_RETRIES):
     """GET with retry + exponential backoff + jitter on timeout/connection errors,
@@ -172,8 +182,8 @@ def fetch_with_retry(url, timeout=DEFAULT_TIMEOUT, max_retries=MAX_RETRIES):
     rather than hammering the server again immediately."""
     for attempt in range(1, max_retries + 1):
         try:
-            resp = requests.get(url, timeout=timeout)
- 
+            resp = requests.get(url, timeout=timeout, headers=REQUEST_HEADERS)
+
             if resp.status_code in RETRYABLE_STATUS_CODES:
                 if attempt == max_retries:
                     log.error("Giving up after %d attempts: still getting HTTP %d",
@@ -193,10 +203,10 @@ def fetch_with_retry(url, timeout=DEFAULT_TIMEOUT, max_retries=MAX_RETRIES):
                             resp.status_code, attempt, max_retries, wait)
                 time.sleep(wait)
                 continue
- 
+
             resp.raise_for_status()
             return resp
- 
+
         except (requests.exceptions.ReadTimeout,
                 requests.exceptions.ConnectionError) as e:
             if attempt == max_retries:
@@ -206,10 +216,10 @@ def fetch_with_retry(url, timeout=DEFAULT_TIMEOUT, max_retries=MAX_RETRIES):
             log.warning("Request failed (attempt %d/%d): %s -- retrying in %.1fs",
                         attempt, max_retries, e, wait)
             time.sleep(wait)
- 
+
     # all attempts hit a retryable status and the loop above already raised on
     # the last one, but keep a fallback in case max_retries == 0
- 
+
     raise requests.exceptions.HTTPError("Rate limited (429) and out of retries")
 
 
@@ -387,6 +397,9 @@ def push_to_zotero(cfg, papers):
 
 def main():
     cfg = load_config()
+    custom_ua = cfg["arxiv"].get("user_agent", "").strip()
+    if custom_ua:
+        REQUEST_HEADERS["User-Agent"] = custom_ua
     state_file = cfg["state"].get("state_file", "state.json")
     state = load_state(state_file)
 

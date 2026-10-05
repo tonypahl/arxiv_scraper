@@ -21,6 +21,7 @@ import configparser
 import json
 import logging
 import random
+import re
 import smtplib
 import sys
 import time
@@ -54,7 +55,6 @@ ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/sc
 DEFAULT_TIMEOUT = 60          # per-request read timeout, in seconds
 MAX_RETRIES = 4
 BACKOFF_BASE = 5              # seconds
-
 
 # How many days before the last run each query window starts. arXiv only
 # exposes a paper in the API once it's announced, which can be a day or more
@@ -278,7 +278,9 @@ def fetch_papers(search_query, from_date, to_date, max_results=200):
 
 def parse_entry(entry):
     arxiv_id_full = entry.find("atom:id", ARXIV_NS).text.strip()
-    arxiv_id = arxiv_id_full.rsplit("/abs/", 1)[-1]
+    # Drop the version suffix (e.g. "2609.12345v2" -> "2609.12345") so a
+    # revised paper isn't treated as new by the de-dupe check.
+    arxiv_id = re.sub(r"v\d+$", "", arxiv_id_full.rsplit("/abs/", 1)[-1])
     title = " ".join(entry.find("atom:title", ARXIV_NS).text.split())
     summary = " ".join(entry.find("atom:summary", ARXIV_NS).text.split())
     authors = [
@@ -468,6 +470,7 @@ def main():
         else:
             log.info("No new papers to send.")
 
+    state["seen_ids"] = sorted(seen_ids)
     state["last_run_date"] = today.strftime("%Y-%m-%d")
     save_state(state_file, state)
 
